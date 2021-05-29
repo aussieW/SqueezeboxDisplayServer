@@ -1,5 +1,5 @@
 import sys
-
+import json
 
 
 from pylms import server
@@ -23,34 +23,47 @@ def on_connect(client, userdata, flags, rc):
     print("connected with result code "+str(rc))
     if rc==0:
         client.subscribe('squeezebox/control')
-        return true
+        return True
     else:
-        return false 
+        return False
 
 def on_message(client, userdata, msg):
     #global players
-#    print "Topic: ",msg.topic+'\nMessage: '+str(msg.payload)
+    strTopic = str(msg.topic) 
+    #strPayload = str(msg.payload)
+    #print("Topic: "+strTopic+'\nMessage: '+strPayload)
+    strPayload = "".join(chr(x) for x in msg.payload)
+    print("Topic: "+strTopic+'\nMessage: '+strPayload)
+    print(msg.topic, type(msg.topic))
     if msg.topic == 'squeezebox/control':
-        if msg.payload == 'PLAY':
-            for player in range(len(players)):
-                players[player].play()
-        elif msg.payload == 'STOP':
-           for player in range(len(players)):
-                players[player].stop()
-        # Temporarily use players[0] as the player being controlled.  <<-- TO FIX
-        # Need to include the player name in the mqtt message.
-        elif msg.payload == 'NEXT':
-            print players[0]
-            players[0].next()
-        elif msg.payload == 'PREV':
-            players[0].prev()
-        elif msg.payload == 'PAUSE':
-            players[0].pause()
-            print('paused ...')
-        elif msg.payload == 'VOLUP':
-            players[0].volume_up(1)
-        elif msg.payload == 'VOLDN':
-            players[0].volume_down(1)
+#        try:
+        data = json.loads(strPayload)
+            #data = "".join(chr(x) for x in data)
+#        print(data)
+        p = players_by_name[data["player"]]
+#        print(p)
+        command = data["cmnd"]
+#        print(command)
+#        except Exception as ex:
+#            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+#            message = template.format(type(ex).__name__, ex.args)
+#            return
+        if command == 'PLAY':
+#            print('play')
+            p.play()
+#            print('Made it here!!')
+        elif command == 'STOP':
+            p.stop()
+        elif command == 'NEXT':
+            p.next()
+        elif command == 'PREV':
+            p.prev()
+        elif command == 'PAUSE':
+            p.pause()
+        elif command == 'VOLUP':
+            p.volume_up(1)
+        elif command == 'VOLDN':
+            p.volume_down(1)
 
 squeezeServer = server.Server(LMSServer)
 
@@ -64,6 +77,7 @@ client.connect(MQTTServer,1883,60)
 player_count = 0
 display_enabled = False
 players = {}
+players_by_name = {}
 player = None
 current_track = {}
 mode = {}
@@ -88,8 +102,8 @@ while 1:
         try:
             squeezeServer.connect()
             LMSRunning = True
-            print 'Logged in: %s' % squeezeServer.logged_in
-            print 'Version: %s' % squeezeServer.get_version()
+            print('Logged in: %s' % squeezeServer.logged_in)
+            print('Version: %s' % squeezeServer.get_version())
         except Exception as e:
             print('Oops!', e.__class__, 'occured')
             # wait before retrying
@@ -99,7 +113,7 @@ while 1:
 #    print(time.time())
 
 #    if squeezeServer.get_player(player_name):
-#	print("player is available")
+#        print("player is available")
     # Note: there seems to be a lengthy delay between a playey becoming unavailable 
     #       and get_player() no longer registering it - bug in pylms???
 #    while squeezeServer.get_player(player_name):  # Only contine if there is a player, otherwise errors occur.
@@ -109,23 +123,34 @@ while 1:
 
 
     try:
-        if squeezeServer.get_player_count() != len(players):
-#            players = {}
-            player_count = squeezeServer.get_player_count()
-            #print('Player count: %s' %player_count)
-            for player in squeezeServer.get_players():
-                ref = player.get_ref()
-                if ref not in players:
-                    players[ref] = player
-                    print("Adding mode for player %s" %ref)
-                    mode[ref] = player.get_mode()
-                    current_track[ref] = None # Initialise this variable for use later.
-            print('System reported player count: %s' %player_count)
-            print('Tracked player count: %s' %len(players))
-            if player_count <> len(players):
-                print ('WARNING ... WARNING ... WARNING: Player count currpution')
-            print('Modes %s' %mode)
-            print(players)
+        available_players = squeezeServer.get_players()  # returns a list of player ojects
+        ap_refs = []
+        for ap in available_players:
+            ap_refs.append(ap.get_ref())  # build a list of the references of availabel players
+        # add new players
+        for ap_ref in ap_refs:
+            if ap_ref not in  players.keys():
+                players[ap_ref] = squeezeServer.get_player(ap_ref)
+                players_by_name[squeezeServer.get_player(ap_ref).get_name()] = squeezeServer.get_player(ap_ref)
+#                print('players by name: %s' %players_by_name)
+#                print("Adding mode for player %s" %ap_ref)
+                mode[ap_ref] = None  #players[ap_ref].get_mode()
+                current_track[ap_ref] = None # Initialise this variable for use later.
+
+        # remove disconnected players from the list of tracked players
+        for tp in players.keys():
+            if tp not in ap_refs:
+                del players[tp]
+                del mode[tp]
+                del current_track[tp]
+                del players_by_name[tp.get_name()]
+
+#        print('System reported player count: %s' %player_count)
+#        print('Tracked player count: %s' %len(players))
+#        if player_count <> len(players):
+#            print ('WARNING ... WARNING ... WARNING: Player count currpution')
+#        print('Modes %s' %mode)
+#        print(players)
     except ValueError:
         # There seems to be a bug in server.py::get_player_count() which passes random crap back rather than an int.
         # Just ignore it.
@@ -140,31 +165,12 @@ while 1:
         player_count = 0
         players = []
 
+    if  squeezeServer.get_player_count() != len(players):
+        print('WARNING ... WARNING ... WARNING: Player count currpution')
 
 
 
-    available_players = squeezeServer.get_players()  # returns a list of player ojects
-    ap_refs = []
-    for ap in available_players:
-        ap_refs.append(ap.get_ref())  # build a list of the references of availabel players
-#    print(available_players, type(available_players), available_players[0].get_ref(), type(available_players[0].get_ref()))
-#    print(players[available_players[0].get_ref()], type(players[available_players[0].get_ref()]))
-#    if available_players[0].get_ref() in players.keys():
-#        print("yeah")
-    # add new players
-    for ap in available_players:
-        if ap.get_ref() not in  players.keys():
-            players[ap.get_ref()] = ap
-    # remove disconnected players from the list of tracked players
-    for tp in players.keys():
-        if tp not in ap_refs:
-            del players[tp]
-
-
-
-
-
-    if player_count > 0:
+    if len(players) > 0:
 #        print(time.time())
 #        client.loop()
 #        print(time.time())
@@ -196,28 +202,32 @@ while 1:
                     #  as available by pylms - bug??
                     # Break out of the while loop and retest for player availability.
                     player_count = player_count - 1
-		    print("Player is not available")
+                    print("Player is not available")
                     break
             #print '%s - %s  %s-%s' %(artist,track, time_elapsed, time_remaining)
             #print "Track",track
             #print "Current Track",current_track
-            if track[ref] != current_track[ref]:
-                try:
-                    #publish.single('/squeezebox/display_pool', '%s - %s :%d:' %(artist,track, time_elapsed), hostname='192.168.1.151')
-                    client.publish('squeezebox/' + players[ref].get_name() + '/track', '%s - %s' %(artist[ref],track[ref]))
-                    print ("New song %s - %s" %(artist[ref],track[ref]))
-                    current_track[ref] = track[ref]
-                except Exception, e:
-                    print 'Exception type is %s.' %(e)
-                    # Reconnect to display.
-                    #display_connected = connectToDisplay()
+            try:
+                if track[ref] != current_track[ref]:
+                    try:
+                        #publish.single('/squeezebox/display_pool', '%s - %s :%d:' %(artist,track, time_elapsed), hostname='192.168.1.151')
+                        client.publish('squeezebox/' + players[ref].get_name() + '/track', '%s - %s' %(artist[ref],track[ref]))
+                        print ("New song %s - %s" %(artist[ref],track[ref]))
+                        current_track[ref] = track[ref]
+                    except Exception as e:
+                        print('Exception type is %s.' %(e))
+                        # Reconnect to display.
+                        #display_connected = connectToDisplay()
+            except:
+                print('track %s,  current_track %s' %(track, current_track))
+
 
             # Send a message if the mode has changed.
             currentMode[ref] = players[ref].get_mode()
             if currentMode[ref] != mode[ref]:
                 client.publish('squeezebox/' + players[ref].get_name() + '/mode', currentMode[ref])
                 mode[ref] = currentMode[ref]
-                print mode[ref]
+                print(mode[ref])
                 print('Modes %s' %mode[ref])
 
     time.sleep(1.01)  # reduce CPU useage by slowing down the loop.
